@@ -1,15 +1,10 @@
-import io
-import struct
-import zlib
-import csv
-from typing import BinaryIO
-import pathlib
-import sys
+import io, struct, zlib, csv, pathlib, sys
 
 class Camera():
-    values = []
+    #values = []
     def __init__(self, idx:int):
         self.idx = idx
+        self.values = []
 
     @property
     def full_data(self):
@@ -45,17 +40,20 @@ def import_csv_Values(bin_file_path: str, values:list, part_id:int):
         size_of_camera_data, offset_number_of_camera_view=  struct.unpack("<HI", uncompress_bin_file.read(6))
         uncompress_bin_file.seek(files_offset[part_id],0)
         uncompress_bin_file.seek(offset_number_of_camera_view,1)
-        number_of_camera_view = struct.unpack("<I", uncompress_bin_file.read(4))[0] - 1
+        number_of_camera_view = struct.unpack("<I", uncompress_bin_file.read(4))[0]
         uncompress_bin_file.read(number_of_camera_view * 4)
         # skip zeros
-        uncompress_bin_file.read(4)
+        #uncompress_bin_file.read(4)
         for value in values:
-            if len(value) != int(size_of_camera_data/2):
+            if len(value) != size_of_camera_data//2:
                 raise Exception("Quantity of values to be insert doesn't match")
             # print(value)
             # print(struct.pack("<%dH" % int(size_of_camera_data/2), *value))
             # print(len(struct.pack("<%dH" % int(size_of_camera_data/2), *value)))
-            uncompress_bin_file.write(struct.pack("<%dH" % int(size_of_camera_data/2), *value))
+            #normalize_value = [int(v) * 0x8000 for v in value]
+            for v in value:
+                uncompress_bin_file.write(struct.pack("<h", int(v * 0x8000)))
+            #uncompress_bin_file.write(struct.pack("<%dH" % (size_of_camera_data // 2), *normalize_value))
         uncompress_bin_file.seek(0,2)
         uncompress_file_size = uncompress_bin_file.tell()
         uncompress_bin_file.seek(0,0)
@@ -67,28 +65,25 @@ def import_csv_Values(bin_file_path: str, values:list, part_id:int):
         f.write(bytearray(20))
         f.write(compress_bin_file)
 
-def read_cinematics_ids(f:BinaryIO):
+def read_cinematics_ids(f:io.IOBase):
     total_cinematics, cinematics_ids_offset = struct.unpack("<II",f.read(8))
     f.seek(cinematics_ids_offset,0)
     return [cinematic_idx for cinematic_idx in struct.unpack("<%dH" % total_cinematics, f.read(total_cinematics * 2))]
     
-def read_cinematic(f:BinaryIO, idx: int):
+def read_cinematic(f:io.IOBase, idx: int):
     magic_number = f.read(8)
     if magic_number != magic_numbers[1]:
         raise Exception("Not a cinematic file")
-    last_camera_idx = struct.unpack("<I", f.read(4))[0]
-    f.read(2)
-    size_of_camera_data = struct.unpack("<H", f.read(2))[0]
-    offset_number_of_camera_view = struct.unpack("<I", f.read(4))[0]
+
+    last_camera_idx, _, size_of_camera_data, offset_number_of_camera_view = struct.unpack("<f2HI", f.read(12))
     f.seek(offset_number_of_camera_view,0)
-    number_of_camera_view = struct.unpack("<I", f.read(4))[0] - 1
-    cameras = [Camera(struct.unpack("<I", f.read(4))[0]) for i in range(number_of_camera_view)]
-    # skip zeros
-    f.read(4)
-    i = 0
-    while i < number_of_camera_view:
-        cameras[i].values = [value for value in struct.unpack("<%dH" % int(size_of_camera_data/2), f.read(size_of_camera_data))]
-        i+=1
+    print("id:", idx, "total components", size_of_camera_data//2, "size of unknown data", offset_number_of_camera_view - 20)
+    number_of_camera_view = struct.unpack("<I", f.read(4))[0]
+    cameras = [Camera(struct.unpack("<f", f.read(4))[0]) for _ in range(number_of_camera_view)]
+
+    for i in range(number_of_camera_view):
+        cameras[i].values = [value/0x8000 for value in struct.unpack("<%dh" % (size_of_camera_data//2), f.read(size_of_camera_data))]
+
     return Cinematic(idx, cameras, last_camera_idx, size_of_camera_data)
 
 if __name__ == "__main__":
@@ -98,7 +93,6 @@ if __name__ == "__main__":
     total_arg = len(sys.argv)
     if total_arg != 2:
         raise Exception("Invalid quantity of arguments")
-        exit()
     file_path = str(sys.argv[1])
 
     full_path = str(pathlib.Path(file_path).resolve())
@@ -117,7 +111,7 @@ if __name__ == "__main__":
                 if i == 0:
                     heading_index = [line.index(row) for row in line if "VALUE" in row]
                 else:
-                    val =[int(line[index]) for index in heading_index]
+                    val =[float(line[index]) for index in heading_index]
                     values.append(val)
             # print(values)
             try:
@@ -192,6 +186,7 @@ if __name__ == "__main__":
         for i, cinematic_file in enumerate(cinematics_files):
             with open("%s_%03d.bin" % (file_path, i+1), "wb") as f:
                 #"%(num)03d" % {"num":5}
+                print(i + 1)
                 try:
                     cinematics.append(read_cinematic(cinematic_file,cinematics_ids[i]))
                     cinematic_file.seek(0,0)
